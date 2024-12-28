@@ -1,0 +1,863 @@
+---
+title: "BTC"
+author: "Rafał Łubkowski"
+date: "2024-12-02"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    number_sections: true
+    theme: united
+---
+
+# Wstęp
+
+Bitcoin **(BTC)** to pierwsza i najpopularniejsza kryptowaluta, stworzona w 2009 roku przez anonimową osobę lub grupę osób posługującą się pseudonimem **Satoshi Nakamoto**. Bitcoin zrewolucjonizował świat finansów, wprowadzając koncepcję zdecentralizowanej waluty opartej na technologii blockchain. Dzięki swojej unikalnej strukturze i ograniczonej podaży do 21 milionów sztuk, BTC stał się cyfrowym odpowiednikiem złota, budząc zainteresowanie zarówno inwestorów indywidualnych, jak i (w ostatnim czasie) instytucji finansowych.
+
+Jednym z najważniejszych mechanizmów w ekosystemie Bitcoina jest **halving**. Jest to proces zmniejszania o połowę nagrody za wydobycie nowego bloku, który odbywa się co około cztery lata. Halving ma kluczowy wpływ na podaż BTC, co często prowadzi do znacznych zmian cenowych. Do tej pory miały miejsce cztery halvingi (2012, 2016, 2020, 2024), a każdy z nich poprzedzał długoterminowy wzrost cen, osiągając nowe historyczne maksima (ATH).
+
+Warto zauważyć że zostało już wydobyte \~19'750'000 z 21'000'000 BTC a aktualne prognozy przewidują wydobycie ostatniego BTC w 2140roku.
+
+# Użyte pakiety
+
+```{r message=FALSE}
+library(readr)
+library(tidyr)
+library(ggplot2)
+library(dplyr)
+library(mice)
+library(TTR)
+library(scales)
+library(zoo)
+library(lubridate)
+library(knitr)
+```
+
+# Analizowane dane
+
+`daily_data` - Zbiór danych stanowi przekształconą wersję jednominutowych notowań Bitcoina (BTC), które zostały pobrane z platformy Kaggle. Dane zostały zagregowane do formatu dziennego, co umożliwia łatwiejsze badanie długoterminowych trendów cenowych i zmienności rynku.
+
+`ath_points` - **ATH (All-Time High)**: Zestaw punktów maksymalnej ceny BTC na przestrzeni 500 dni, reprezentujących najwyższą wartość zamknięcia w danym okresie.
+
+`atl_points` - **ATL (All-Time Low)**: Zestaw punktów minimalnej ceny BTC na przestrzeni 400 dni, wskazujących najniższą wartość zamknięcia.
+
+`popularnosc12_15` `popularnosc15_19` `popularnosc19_22` `popularnosc22_24` - są to dane pobrane z GoogleTrends o zainteresowaniu frazą "Bitcoin" dla lat analogicznych do nazwy danych, wykorzystuję je do identyfikacji szczytu zainteresowania. Każdy z tych zestawów ma dane gdzie wartość =100 oznacza to maksymalne zainteresowanie w danym okresie.
+
+\
+`EMA50` `EMA200` - Wskaźniki techniczne w postaci wykładniczych średnich kroczących (Exponential Moving Average), wyznaczone dla 50- oraz 200-dniowych okresów dla cen zamknięcia BTC.
+
+`Nasdaq_100` - Dane indeksu Nasdaq-100 zostały pobrane z platformy Investing.com. Stanowią one punkt odniesienia do porównania zmienności i dynamiki rynku kryptowalutowego z tradycyjnym rynkiem akcji, zwłaszcza w segmencie technologicznym.
+
+\
+`RollingVolatility` - (zmienność krocząca) to miara obrazująca, jak dynamicznie zmieniają się ceny w danym okresie czasu. Jest obliczana w oparciu o logarytmiczne stopy zwrotu, które opisują względne zmiany cen z dnia na dzień. Aby uzyskać rolling volatility, analizuje się 30-dniowe okno czasowe, przesuwane w kolejnych dniach, i dla każdego takiego okresu oblicza się odchylenie standardowe zmian cen.\
+
+# Pytania badawcze
+
+-   Czy istnieje cykliczność w cenie BTC związana z halvingami?
+
+    -   Wykorzystanie wykresu cen BTC z zaznaczeniem momentów halvingów oraz ATH i ATL, aby zobrazować wpływ tych zdarzeń na cykl rynkowy.
+
+-   Kiedy w trakcie cyklu BTC odnotowuje się największe zainteresowanie tematem tej kryptowaluty?
+
+    -   Analiza danych z Google Trends zainteresowania tematem BTC w różnych fazach cyklu.
+
+-   Jak wyglądałaby inwestycja w BTC dokonana w momencie największego zainteresowania (na ATH)?
+
+    -   Symulacja wyników inwestycji w momencie szczytu zainteresowania, z uwzględnieniem późniejszego spadku i potencjalnego okresu odrabiania strat.
+
+-   Jak wyznaczyć moment potencjalnego wejścia w inwestycję w BTC, aby uniknąć zakupu na ATH?
+
+    -   Weryfikacja strategii inwestycyjnej, przy użyciu średnich kroczących, w celu identyfikacji bardziej optymalnych momentów zakupu.
+
+-   Czy istnieje sezonowość w miesięcznych zwrotach z inwestycji w BTC?
+
+    -   Analiza miesięcznych stóp zwrotu z BTC w celu identyfikacji wzorców sezonowych (np. większe wzrosty w określonych miesiącach).
+
+-   Czy zmienność BTC zmniejszyła się w czasie?
+
+    -   Porównanie zmienności BTC na przestrzeni lat.
+
+-   Jak zmiennym aktywem finansowym jest BTC w porównaniu do indeksu Nasdaq100?
+
+    -   Porównanie odchylenia standardowego dla BTC oraz Nasdaq100 w tym samym okresie.
+
+```{r include=FALSE}
+btcusd_1_min_data <- read_csv("Downloads/btcusd_1-min_data.csv")
+btcusd_1_min_data$HumanReadableDate <- as.POSIXct(btcusd_1_min_data$Timestamp, origin = "1970-01-01", tz = "Europe/Warsaw")
+
+halving_dates <- as.Date(c("2012-11-28", "2016-07-09", "2020-05-11", "2024-04-01"))
+btcusd_1_min_data$HalvingGroup <- factor(
+  findInterval(as.Date(btcusd_1_min_data$HumanReadableDate), halving_dates),
+  labels = c("Before Halving 2012", "Halving 2012", "Halving 2016", "Halving 2020", "Halving 2024")
+)
+
+daily_data <- btcusd_1_min_data %>%
+  mutate(HumanReadableDate = as.Date(HumanReadableDate)) %>%
+  group_by(Date = as.Date(cut(HumanReadableDate, "1 day"))) %>%
+  summarise(
+    Open = first(Open),
+    High = max(High),
+    Low = min(Low),
+    Close = last(Close),
+    Volume = sum(Volume),
+    HalvingGroup = last(HalvingGroup)
+  ) %>%
+  ungroup()
+daily_data$DayOfWeek <- weekdays(daily_data$Date)
+unique(daily_data$HalvingGroup)
+
+```
+
+```{r include=FALSE}
+Nasdaq_100_Daily <- read_csv("Downloads/Nasdaq 100 Historical Data (3).csv", 
+    col_types = cols(Date = col_date(format = "%m/%d/%Y"), 
+        `Change %` = col_character()))
+Nasdaq_100_Daily <- Nasdaq_100_Daily %>%
+  rename(Close = Price)
+```
+
+# Sprawdzenie poprawności danych
+
+```{r}
+md.pattern(daily_data, rotate.names = TRUE)
+which(is.na(daily_data$Date))
+daily_data <- daily_data[-4711, ]
+```
+
+Wiersz 4711 jest to ostatni wiersz, był niekąpletny ponieważ w momęcie pobierania danych dzień się jeszcze nie skończył, więc usunięcie go jest bezproblemowe.
+
+# ATH i ATL
+
+```{r include=FALSE}
+find_ath_points <- function(data, price_col, date_col, window_size = 500) {
+  if (!all(c(price_col, date_col) %in% colnames(data))) {
+    stop("Podane kolumny nie istnieją w danych.")
+  }
+  
+  if (!inherits(data[[date_col]], "Date")) {
+    stop("Kolumna daty musi być w formacie Date.")
+  }
+  
+
+  price <- data[[price_col]]
+
+  is_ath <- rollapply(price, width = 2 * window_size + 1, 
+                      FUN = function(x) which.max(x) == (window_size + 1), 
+                      align = "center", fill = NA)
+  
+
+  ath_data <- data[is_ath, c(date_col, price_col)]
+  colnames(ath_data) <- c("Date", "ATH")
+  
+  return(ath_data)
+}
+
+find_atl_points <- function(data, price_col, date_col, window_size = 500) {
+  if (!all(c(price_col, date_col) %in% colnames(data))) {
+    stop("Podane kolumny nie istnieją w danych.")
+  }
+  
+
+  if (!inherits(data[[date_col]], "Date")) {
+    stop("Kolumna daty musi być w formacie Date.")
+  }
+  
+  price <- data[[price_col]]
+  
+
+  is_atl <- rollapply(price, width = 2 * window_size + 1, 
+                      FUN = function(x) which.min(x) == (window_size + 1), 
+                      align = "center", fill = NA)
+  
+
+  atl_data <- data[is_atl, c(date_col, price_col)]
+  colnames(atl_data) <- c("Date", "ATL")
+  
+  return(atl_data)
+}
+
+
+daily_data$Date <- as.Date(daily_data$Date, format = "%Y-%m-%d")
+
+
+ath_points <- find_ath_points(daily_data, price_col = "Close", date_col = "Date", window_size = 500)
+ath_points<- remove_missing(ath_points, na.rm = TRUE)
+print(ath_points)
+
+atl_points <- find_atl_points(daily_data, price_col = "Close", date_col = "Date", window_size = 400)
+atl_points <- remove_missing(atl_points, na.rm = TRUE)
+```
+
+## Wykres
+
+```{r}
+dark2_colors <- RColorBrewer::brewer.pal(n = 5, name = "Dark2")
+  group_colors <- scale_color_manual(
+    values = c(
+      "Before Halving 2012" = dark2_colors[1],  
+      "Halving 2012" = dark2_colors[2],  
+      "Halving 2016" = dark2_colors[3],  
+      "Halving 2020" = dark2_colors[4],  
+      "Halving 2024" = dark2_colors[5]  
+    )
+  )
+
+ggplot(daily_data, aes(x = Date, y = Close, color = HalvingGroup)) +
+  geom_line() +
+  scale_y_log10(labels = scales::label_comma()) +  
+  group_colors +
+  labs(title = "Cena Bitcoina na skali logarytmicznej z kolorami zależnymi od halvingu",
+       x = "Data", y = "Cena (logarytmiczna)") +
+  theme_light() + 
+   theme(
+    legend.position = "right") +
+ 
+  geom_point(data = ath_points, aes(x = Date, y = ATH), 
+             color = "darkgreen", size = 3, shape = 19, alpha = 0.8) +
+  
+ 
+  geom_point(data = atl_points, aes(x = Date, y = ATL), 
+             color = "darkred", size = 3, shape = 19, alpha = 0.8) 
+
+```
+
+Zmniejszenie podaży nowych BTC
+
+Nagroda za wydobycie bloku po kolejnych Halvingach:
+
+-   Początkowa nagroda wynosiła 50 BTC.
+
+-   Po pierwszym halvingu w 2012 r. spadła do 25 BTC.
+
+-   Po kolejnych halvingach wynosiła następnie 12,5 BTC oraz 6,25 BTC, a obecnie (po halvingu w 2024 r.) jest to 3,125 BTC.
+
+    Zmniejszenie nagrody oznacza, że na rynek trafia mniej nowych Bitcoinów. Przy stałym lub rosnącym popycie, zmniejszenie podaży prowadzi do presji na wzrost ceny. Między innymi dlatego możemy obserwować wzrosty ceny po każdym z halvingów.
+
+## Zależności czasowe między ATH i ATL
+
+```{r echo=FALSE}
+
+# Obliczenia i wypisywanie wyników w ładnym formacie do R Markdown
+
+# Liczba dni pomiędzy kolejnymi ATH
+cat(" Liczba dni pomiędzy kolejnymi ATH:\n")
+days_between_ath <- diff(ath_points$Date)
+cat(days_between_ath, sep = "\n")
+
+# Liczba dni pomiędzy kolejnymi ATL
+cat("Liczba dni pomiędzy kolejnymi ATL:\n")
+days_between_atl <- diff(atl_points$Date)
+cat(days_between_atl, sep = "\n")
+
+# Liczba dni pomiędzy każdym ATH a odpowiadającym ATL
+cat("Liczba dni pomiędzy każdym ATH a następnym ATL:\n")
+days_ath_to_atl <- as.numeric(atl_points$Date - ath_points$Date)
+cat(days_ath_to_atl, sep = "\n")
+
+# Średnia liczba dni między ATH a ATL
+mean_days_ath_to_atl <- mean(days_ath_to_atl)
+cat("Średnia liczba dni między ATH a ATL: ", mean_days_ath_to_atl, " dni\n")
+
+# Liczba dni pomiędzy ATL a następnym ATH
+cat("Liczba dni pomiędzy ATL a następnym ATH:\n")
+days_atl_to_next_ath <- as.numeric(ath_points$Date[-1] - atl_points$Date[-nrow(atl_points)])
+cat(days_atl_to_next_ath, sep = "\n")
+
+# Spadek procentowy od ATH do ATL
+cat("Spadek procentowy od ATH do ATL:\n")
+percentage_drop <- ((ath_points$ATH - atl_points$ATL) / ath_points$ATH) * 100
+cat(percentage_drop, sep = "\n")
+
+# Średnie liczby dni między ATH i ATL
+cat("Podsumowanie średnich:\n")
+mean_days_ath <- mean(days_between_ath)
+cat("Średnia liczba dni między ATH: ", mean_days_ath, " dni\n")
+
+mean_days_atl <- mean(days_between_atl)
+cat("Średnia liczba dni między ATL: ", mean_days_atl, " dni\n")
+
+# Prognozy kolejnych ATH i ATL
+last_ath_date <- ath_points$Date[length(ath_points$Date)]
+predicted_next_ath <- as.Date(last_ath_date) + days(as.numeric(mean_days_ath))
+cat("Przewidywana data kolejnego ATH: ", format(predicted_next_ath, "%Y-%m-%d"), "\n")
+
+last_atl_date <- as.Date(atl_points$Date[length(atl_points$Date)])
+predicted_next_atl <- as.Date(last_atl_date) + days(as.numeric(mean_days_atl))
+cat("Przewidywana data kolejnego ATL: ", format(predicted_next_atl, "%Y-%m-%d"), "\n")
+
+predicted_next_atl_2 <- as.Date(predicted_next_ath) + days(as.numeric(mean_days_ath_to_atl))
+cat("Przewidywana data kolejnego ATL po przewidywanym ATH: ", format(predicted_next_atl_2, "%Y-%m-%d"), "\n")
+```
+
+Jak widać kolejne ATH i dołki historycznie cechowały się cyklicznością i możemy spróbować przewidzieć przybliżone daty kolejnego ATH i następującego dołku.
+
+```{r include=FALSE}
+daily_data_1 <- daily_data %>% filter(Date >= as.Date("2012-01-01") & Date <= as.Date("2014-12-28"))
+daily_data_2 <- daily_data %>% filter(Date > as.Date("2014-12-28") & Date <= as.Date("2018-12-30"))
+daily_data_3 <- daily_data %>% filter(Date > as.Date("2018-12-30") & Date <= as.Date("2022-11-27"))
+daily_data_4 <- daily_data %>% filter(Date > as.Date("2022-11-27"))
+```
+
+```{r include=FALSE}
+ popularnosc12_15 <- read_delim("Downloads/popularnosc12-15.csv", 
+    delim = ";", 
+    escape_double = FALSE, 
+    trim_ws = TRUE, 
+    col_types = cols(
+        Date = col_date(format = "%d.%m.%Y"), 
+        Popularnosc = col_double()
+    ))
+```
+
+```{r include=FALSE}
+popularnosc15_19 <- read_delim("Downloads/popularnosc15-19.csv", 
+    delim = ";", 
+    escape_double = FALSE, 
+    trim_ws = TRUE, 
+    col_types = cols(
+        Date = col_date(format = "%d.%m.%Y"), 
+        Popularnosc = col_double()
+    ))
+```
+
+```{r include=FALSE}
+popularnosc19_22 <- read_delim("Downloads/popularnosc19-22.csv", 
+    delim = ";", 
+    escape_double = FALSE, 
+    trim_ws = TRUE, 
+    col_types = cols(
+        date = col_date(format = "%d.%m.%Y"), 
+        popularnosc = col_double()
+    ))
+```
+
+```{r include=FALSE}
+popularnosc22_24 <- read_delim("Downloads/popularnosc22-24.csv", 
+    delim = ";", 
+    escape_double = FALSE, 
+    trim_ws = TRUE, 
+    col_types = cols(
+        date = col_date(format = "%d.%m.%Y"), 
+        popularnosc = col_double()
+    ))
+```
+
+## Popularność frazy "Bitcoin" w google a ATH
+
+```{r}
+merged_data_1 <- daily_data_1 %>%
+  left_join(popularnosc12_15, by = c("Date" = "Date")) %>% 
+  mutate(
+    Highlight = ifelse(Popularnosc > 85, TRUE, FALSE)
+  )
+
+plot_1 <- ggplot() +
+  geom_line(
+    data = merged_data_1, 
+    aes(x = Date, y = Close, color = HalvingGroup), 
+    linewidth =0.75
+  ) +
+  geom_point(
+    data = merged_data_1 %>% filter(Highlight == TRUE), 
+    aes(x = Date, y = Close), 
+    color = "darkred", 
+    size = 2
+  ) +
+  geom_point(data = ath_points[1,], aes(x = Date, y = ATH), 
+             color = "darkgreen", size = 3, shape = 19, alpha = 0.8) +
+  scale_y_log10(labels = scales::comma, name = "Cena Bitcoina (USD, logarytmiczna)") +
+  group_colors +
+  labs(
+    title = "Cena Bitcoina z naniesioną popularnością BTC (Google Trends > 85)",
+    x = "Data",
+    y = "Cena Bitcoina (USD, logarytmiczna)"
+  ) +
+  theme_light() +
+  theme(
+    legend.position = "right",
+    legend.title = element_text(size = 12),
+    legend.text = element_text(size = 10)
+  )
+
+```
+
+```{r}
+merged_data_2 <- daily_data_2 %>%
+  left_join(popularnosc15_19, by = c("Date" = "Date")) %>% 
+  mutate(
+    Highlight = ifelse(Popularnosc > 85, TRUE, FALSE)
+  )
+
+plot_2 <- ggplot() +
+  geom_line(
+    data = merged_data_2, 
+    aes(x = Date, y = Close, color = HalvingGroup), 
+    linewidth =0.75
+  ) +
+  geom_point(
+    data = merged_data_2 %>% filter(Highlight == TRUE), 
+    aes(x = Date, y = Close), 
+    color = "darkred", 
+    size = 2
+  ) +
+ 
+  geom_point(data = ath_points[2,], aes(x = Date, y = ATH), 
+             color = "darkgreen", size = 3, shape = 19, alpha = 0.8) +
+  scale_y_log10(labels = scales::comma, name = "Cena Bitcoina (USD, logarytmiczna)") +
+  group_colors +
+  labs(
+    title = "Cena Bitcoina z naniesioną popularnością BTC (Google Trends > 85)",
+    x = "Data",
+    y = "Cena Bitcoina (USD, logarytmiczna)"
+  ) +
+  theme_light() +
+  theme(
+    legend.position = "right",
+    legend.title = element_text(size = 12),
+    legend.text = element_text(size = 10)
+  )
+
+```
+
+```{r}
+merged_data_3 <- daily_data_3 %>%
+  left_join(popularnosc19_22, by = c("Date" = "date")) %>% 
+  mutate(
+    Highlight = ifelse(popularnosc > 85, TRUE, FALSE)
+  )
+
+plot_3 <- ggplot() +
+  geom_line(
+    data = merged_data_3, 
+    aes(x = Date, y = Close, color = HalvingGroup), 
+    linewidth =0.75
+  ) +
+  geom_point(
+    data = merged_data_3 %>% filter(Highlight == TRUE), 
+    aes(x = Date, y = Close), 
+    color = "darkred", 
+    size = 2
+  ) +
+
+  geom_point(data = ath_points[3,], aes(x = Date, y = ATH), 
+             color = "darkgreen", size = 3, shape = 19, alpha = 0.8) +
+  scale_y_log10(labels = scales::comma, name = "Cena Bitcoina (USD, logarytmiczna)") +
+  group_colors +
+  labs(
+    title = "Cena Bitcoina z naniesioną popularnością BTC (Google Trends > 85)",
+    x = "Data",
+    y = "Cena Bitcoina (USD, logarytmiczna)"
+  ) +
+  theme_light() +
+  theme(
+    legend.position = "right",
+    legend.title = element_text(size = 12),
+    legend.text = element_text(size = 10)
+  )
+```
+
+```{r}
+merged_data_4 <- daily_data_4 %>%
+  left_join(popularnosc22_24, by = c("Date" = "date")) %>% 
+  mutate(
+    Highlight = ifelse(popularnosc > 85, TRUE, FALSE)
+  )
+
+plot_4 <- ggplot() +
+  geom_line(
+    data = merged_data_4, 
+    aes(x = Date, y = Close, color = HalvingGroup), 
+   linewidth =0.75
+  ) +
+  geom_point(
+    data = merged_data_4 %>% filter(Highlight == TRUE), 
+    aes(x = Date, y = Close), 
+    color = "darkred", 
+    size = 2
+  ) +
+  scale_y_log10(labels = scales::comma, name = "Cena Bitcoina (USD, logarytmiczna)") +
+  group_colors +
+  labs(
+    title = "Cena Bitcoina z naniesioną popularnością BTC (Google Trends > 85)",
+    x = "Data",
+    y = "Cena Bitcoina (USD, logarytmiczna)"
+  ) +
+  theme_light() +
+  theme(
+    legend.position = "right",
+    legend.title = element_text(size = 12),
+    legend.text = element_text(size = 10)
+  )
+
+```
+
+### Okres 2012-2015
+
+```{r echo=FALSE}
+plot_1
+```
+
+### Okres 2015-2019
+
+```{r echo=FALSE}
+plot_2
+```
+
+### Okres 2019-2022
+
+```{r echo=FALSE}
+plot_3
+```
+
+### Okres 2022-2024
+
+```{r echo=FALSE}
+plot_4
+```
+
+Szczyty popularności wyszukiwania frazy „Bitcoin” (czerwone punkty) zazwyczaj występują w momentach osiągania nowych maksimów cenowych (ATH – zielone punkty). Sugeruje to, że w tych okresach na rynek wchodzą nowi inwestorzy, przyciągnięci obietnicą wysokich zysków oraz medialnym szumem wokół dynamicznie rosnącej ceny. Jest to zjawisko typowe dla końcowych faz cyklu hossy, kiedy emocje i oczekiwania dalszych wzrostów osiągają swoje apogeum. Warto podkreślić, że czerwony punkt w obecnym cyklu oznacza jedynie największe dotychczasowe zainteresowanie w tym okresie. Jednak wraz ze wzrostem ceny popularność Bitcoina może jeszcze bardziej wzrosnąć, co może skutkować kolejnym szczytem zainteresowania w przyszłości.
+
+\
+Co jednak jeżeli zainwestujemy na ATH?\
+
+## Jak długo musimy czekać by odrobić poziomy ATH?
+
+```{r}
+calculate_recovery_time <- function(ath_points, price_data) {
+
+  ath_points$RecoveryDate <- as.Date(NA)
+  ath_points$DaysToRecovery <- NA
+  
+  for (i in 1:nrow(ath_points)) {
+    ath_date <- ath_points$Date[i]
+    ath_price <- ath_points$ATH[i]  
+    
+    recovery_idx <- which(price_data$Date > ath_date & price_data$Close >= ath_price)
+    
+    if (length(recovery_idx) > 0) {
+      recovery_date <- price_data$Date[recovery_idx[1]]
+      days_to_recovery <- as.integer(recovery_date - ath_date)
+      
+    
+      ath_points$RecoveryDate[i] <- recovery_date
+      ath_points$DaysToRecovery[i] <- days_to_recovery
+    } else {
+     
+      ath_points$RecoveryDate[i] <- NA
+      ath_points$DaysToRecovery[i] <- NA
+    }
+  }
+  
+  return(ath_points)
+}
+
+
+ath_points_with_recovery <- calculate_recovery_time(ath_points, daily_data)
+mean_days <- mean(ath_points_with_recovery$DaysToRecovery)
+
+kable(ath_points_with_recovery, caption = "Dane dotyczące ATH i dni do odbudowy") 
+
+
+```
+
+```{r echo=FALSE}
+cat("Jeśli kupiliśmy na ATH, to średnio musieliśmy czekać", 
+    round(mean_days, 2), 
+    "dni, aby wyjść na zero.\n")
+```
+
+Jak widać kupienie nawet na ATH na szczycie nie jest największą tragedią, ale musieliśmy przeczekać spadki średnio po 80%, nie ciężko stwierdzić, że nie jest to optymalny czas na wejście nowego inwestora na rynek.
+
+# Jak nie na ATH to kiedy zainwestować?
+
+## EMA50 i EMA200
+
+```{r warning=FALSE}
+daily_data$EMA200 <- EMA(daily_data$Close, n = 200)
+daily_data$EMA50 <- EMA(daily_data$Close, n = 50)
+
+daily_data <- daily_data %>%
+  mutate(Period = case_when(
+    Date >= as.Date("2014-12-28") & Date <= as.Date("2018-12-30") ~ "2014-2018",
+    Date >= as.Date("2018-12-30") & Date <= as.Date("2022-11-27") ~ "2018-2022",
+    Date >= as.Date("2022-11-27") & Date <= as.Date("2024-11-17") ~ "2022-2024",
+    TRUE ~ NA_character_
+  ))
+
+
+plot_2014_2018 <- ggplot(data = daily_data %>% filter(Period == "2014-2018"), aes(x = Date, y = Close, color = HalvingGroup)) +
+  
+  geom_line() +  
+  geom_line(aes(y = EMA200), color = "darkred", size = 0.5) + 
+  geom_line(aes(y = EMA50), color = "darkgreen", size = 0.5) + 
+  
+  geom_point(data = subset(daily_data, Period == "2014-2018" & sign(EMA50 - EMA200) != dplyr::lag(sign(EMA50 - EMA200))), 
+             aes(x = Date, y = EMA50), 
+             color = "purple", size = 3, shape = 19, alpha = 0.8) +
+  
+  scale_y_log10(labels = scales::comma) +
+  group_colors +  
+  labs(title = "2015-2018: Cena Bitcoina, EMA50(zielona), EMA200(czerwona)", 
+       x = "Data", y = "Cena Bitcoina (logarytmiczna)") +
+  theme_light() + 
+  theme(legend.position = "right")
+
+
+plot_2018_2022 <- ggplot(data = daily_data %>% filter(Period == "2018-2022"), aes(x = Date, y = Close, color = HalvingGroup)) +
+  geom_line() + 
+  geom_line(aes(y = EMA200), color = "darkred", size = 0.5) +  
+  geom_line(aes(y = EMA50), color = "darkgreen", size = 0.5) + 
+  
+  
+  geom_point(data = subset(daily_data, Period == "2018-2022" & sign(EMA50 - EMA200) != dplyr::lag(sign(EMA50 - EMA200))), 
+             aes(x = Date, y = EMA50), 
+             color = "purple", size = 3, shape = 19, alpha = 0.8) +
+  
+  scale_y_log10(labels = scales::comma) +
+  group_colors +  
+  labs(title = "2018-2022: Cena Bitcoina, EMA50(zielona), EMA200(czerwona)", 
+       x = "Data", y = "Cena Bitcoina (logarytmiczna)") +
+  theme_light() + 
+  theme(legend.position = "right")
+
+plot_2022_2024 <- ggplot(data = daily_data %>% filter(Period == "2022-2024"), aes(x = Date, y = Close, color = HalvingGroup)) +
+  geom_line() +
+  geom_line(aes(y = EMA200), color = "darkred", size = 0.5) +  
+  geom_line(aes(y = EMA50), color = "darkgreen", size = 0.5) +  
+  
+ 
+  geom_point(data = subset(daily_data, Period == "2022-2024" & sign(EMA50 - EMA200) != dplyr::lag(sign(EMA50 - EMA200))), 
+             aes(x = Date, y = EMA50), 
+             color = "purple", size = 3, shape = 19, alpha = 0.8) +
+  
+  scale_y_log10(labels = scales::comma) +
+  group_colors +  
+  labs(title = "2022-2024: Cena Bitcoina, EMA50(zielona), EMA200(czerwona)", 
+       x = "Data", y = "Cena Bitcoina (logarytmiczna)") +
+  theme_light() + 
+  theme(legend.position = "right")
+
+```
+
+### Wykresy
+
+```{r echo=FALSE}
+plot_2014_2018
+plot_2018_2022
+plot_2022_2024
+```
+
+### Wnioski
+
+Historyczne dane przedstawione na wykresach sugerują, że po długotrwałym trendzie spadkowym na rynku Bitcoina moment pierwszego przecięcia od dołu EMA50 (zielona linia) przez EMA200 (czerwona linia) był zazwyczaj korzystnym sygnałem do zakupu BTC i zawsze byliśmy już po dołku aktualnego cyklu.
+
+\
+Przecięcie EMA50 przez EMA200 od dołu oznacza, że średnia cena z ostatnich 50 dni zaczyna być wyższa niż średnia cena z ostatnich 200 dni. Jest to sygnał, że w krótszym okresie (50 dni) średnia cena zaczyna rosnąć szybciej niż w dłuższym (200 dni), co wskazuje na pojawienie się siły zakupowej na rynku.
+
+To zjawisko sugeruje, że inwestorzy coraz częściej są skłonni kupować po wyższych cenach, co zmienia trend na wzrostowy. W skrócie, oznacza to, że popyt zaczyna przewyższać podaż, a rynek może przechodzić z fazy spadków do fazy wzrostów.
+
+# Sprawdzenie sezonowości zwrotów z inwestycji w BTC
+
+```{r}
+
+daily_data_M_Y <- daily_data %>%
+  mutate(
+    year = year(Date),
+    month = month(Date, label = TRUE, abbr = FALSE) 
+  )
+
+
+filtered_data <- daily_data_M_Y %>%
+  filter(year >= 2014)
+
+monthly_returns <- filtered_data %>%
+  group_by(year, month) %>%
+  summarise(
+    first_close = first(Close, order_by = Date), 
+    last_close = last(Close, order_by = Date),   
+    .groups = "drop"
+  ) %>%
+  mutate(
+    monthly_return = (last_close - first_close) / first_close * 100)
+
+monthly_returns$month <- factor(monthly_returns$month, levels = month.name)
+
+summary_data <- monthly_returns %>%
+  group_by(month) %>%
+  summarise(
+    year = "Średnia",
+    monthly_return = mean(monthly_return, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  bind_rows(
+    monthly_returns %>%
+      group_by(month) %>%
+      summarise(
+        year = "Mediana", 
+        monthly_return = median(monthly_return, na.rm = TRUE),
+        .groups = "drop"
+      )
+  )
+
+monthly_returns <- monthly_returns %>%
+  mutate(year = as.character(year))
+
+final_data <- bind_rows(monthly_returns, summary_data)
+
+
+heatmapa <- ggplot(final_data, aes(x = month, y = year, fill = monthly_return)) +
+  geom_tile(color = "white") +
+  scale_fill_gradient2(
+    low = "darkred", high = "darkgreen", mid = "white",
+    midpoint = 0, labels = scales::percent_format(scale = 1)
+  ) +
+  geom_text(aes(label = round(monthly_return, 1)), color = "black", size = 3) +
+  labs(
+    title = "Miesięczne zwroty Bitcoin (od 1. do ostatniego dnia miesiąca)",
+    x = "Miesiąc",
+    y = "Rok",
+    fill = "Zwrot (%)"
+  ) +
+  theme_light() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    axis.title = element_text(size = 12, face = "bold"),
+    legend.title = element_text(size = 10)
+  )
+
+```
+
+## Wykres
+
+```{r}
+heatmapa
+```
+
+## Wnioski
+
+Na wykresie przedstawiającym miesięczne zwroty Bitcoina w latach 2014-2024 można dostrzec interesujące zależności.
+
+Najlepsze miesiące dla Bitcoina to luty i październik – w 9 z 11 lat Bitcoin odnotowywał wzrosty w tych miesiącach, co sugeruje ich historyczną siłę oraz pozytywny wpływ na cenę tego aktywa.
+
+Z kolei wrzesień okazał się najgorszym miesiącem dla Bitcoina. W 7 z 11 lat Bitcoin tracił na wartości, a średnia zmiana cen w tym okresie wyniosła -4,7%.
+
+Dane te pokazują, że rynek BTC cechuje się sezonowością, a niektóre miesiące wykazują wyraźne, powtarzające się tendencje.\
+
+# Zmienność BTC
+
+```{r warning=FALSE}
+window_size <- 30
+daily_data <- daily_data %>%
+  filter(!is.na(Close)) %>%
+  mutate(
+    LogReturn = log(Close / lag(Close)),
+    RollingVolatility = rollapply(LogReturn, width = window_size, FUN = sd, align = "right", fill = NA)
+  )
+
+ath_points$RollingVolatility <- daily_data$RollingVolatility[match(ath_points$Date, daily_data$Date)]
+daily_data <- daily_data %>%
+  filter(Date>= "2013-07-01")
+
+atl_points$RollingVolatility <- daily_data$RollingVolatility[match(atl_points$Date, daily_data$Date)]
+
+plot_volatility_BTC <- ggplot(daily_data, aes(x = Date, y = RollingVolatility, color = HalvingGroup)) +
+  geom_line() +  
+  group_colors +
+  labs(
+    title = "Rolling Volatility BTC",
+    x = "Data",
+    y = "Rolling Volatility (30-dniowe)"
+  ) +
+  theme_light() +
+  
+  # Punkty ATH
+  geom_point(data = ath_points, aes(x = Date, y = RollingVolatility), 
+             color = "darkgreen", size = 3, shape = 19, alpha = 0.8) +
+  
+  # Punkty ATL
+  geom_point(data = atl_points, aes(x = Date, y = RollingVolatility), 
+             color = "darkred", size = 3, shape = 19, alpha = 0.8)
+
+Nasdaq_100_Daily <- Nasdaq_100_Daily %>%
+  filter(!is.na(Close)) %>%
+  mutate(
+    LogReturn = log(Close / lag(Close)),
+    RollingVolatility = rollapply(LogReturn, width = window_size, FUN = sd, align = "right", fill = NA)
+  )
+
+Nasdaq_100_Daily <- Nasdaq_100_Daily %>%
+  filter(Date>= "2013-07-01")
+```
+
+## BTC
+
+```{r echo=FALSE, warning=FALSE}
+
+print(plot_volatility_BTC)
+
+```
+
+Wykres ukazuje trend spadkowy zmienności Bitcoina w długim okresie.
+
+Możliwe przyczyny spadku zmienności BTC:
+
+-   Dojrzałość rynku**:** W miarę upływu czasu Bitcoin staje się bardziej stabilnym aktywem dzięki zwiększonemu zainteresowaniu instytucji finansowych.
+
+-   Zwiększona płynność: Coraz większa liczba uczestników rynku oraz rosnący wolumen obrotu zmniejszają gwałtowne wahania cen.
+
+```{r include=FALSE}
+merged_volatility <- daily_data %>%
+  select(Date, RollingVolatilityBTC = RollingVolatility) %>%
+  inner_join(
+    Nasdaq_100_Daily %>% select(Date, RollingVolatilityNasdaq = RollingVolatility), 
+    by = "Date"
+  )
+
+
+merged_volatility <- na.omit(merged_volatility)
+```
+
+## Zmienność BTC a Nasdaq_100
+
+```{r}
+
+plot_combined_volatility <- ggplot(merged_volatility, aes(x = Date)) +
+
+  geom_line(aes(y = RollingVolatilityBTC, color = "BTC"), size = 1) +
+
+  geom_line(aes(y = RollingVolatilityNasdaq, color = "Nasdaq"), size = 1) +
+  scale_color_manual(
+    name = "Zmienność:",
+    values = c("BTC" = "darkorange", "Nasdaq" = "steelblue")
+  ) +
+  labs(
+    title = "Porównanie zmienności BTC i Nasdaq 100",
+    x = "Data",
+    y = "Rolling Volatility (30-dniowe)"
+  ) +
+  theme_light() +
+  theme(
+    legend.position = "right",
+    legend.title = element_text(size = 12),
+    legend.text = element_text(size = 10)
+  )
+
+print(plot_combined_volatility)
+
+```
+
+## Wnioski:
+
+Warto zauważyć, że mimo spadku zmienności BTC w ostatnich latach nadal jest to stosunkowo mocno zmienne aktywo dla porównania zamieściłem wykres Nasdaq_100 - indeks 100 największych technologicznych spółek notowanych na giełdzie NASDAQ.
+
+# Zakończenie
+
+Analiza historyczna i statystyczna Bitcoina ukazuje interesujące wzorce cykliczności, sezonowości oraz ewolucji zmienności. Cykle rynkowe BTC, ściśle związane z halvingami, pokazują, że zmniejszenie podaży nowych Bitcoinów prowadzi do wzrostu cen w dłuższej perspektywie, choć poprzedzone jest ono fazami dynamicznych wzrostów i spadków. Zainteresowanie tematem BTC, mierzone m.in. za pomocą Google Trends, najwyraźniej osiąga swoje szczyty w momentach ATH, co sugeruje napływ nowych inwestorów w okresach euforii rynkowej.
+
+Jednocześnie dane historyczne wskazują, że zakup BTC na ATH nie oznacza końca nadziei na zysk – choć średni czas potrzebny na odzyskanie wartości to ponad 1000 dni, to w dłuższym horyzoncie inwestycyjnym rynek wykazuje tendencję wzrostową. Niemniej jednak optymalnym momentem na wejście w inwestycję wydaje się być faza zmiany trendu, sygnalizowana przecięciem EMA50 przez EMA200 od dołu, co historycznie miało miejsce po osiągnięciu cyklicznego dołka.
+
+Analiza miesięcznych stóp zwrotu ujawnia sezonowość na rynku BTC, gdzie luty i październik wyróżniają się jako najlepsze miesiące dla inwestorów, podczas gdy wrzesień charakteryzuje się największym ryzykiem spadków. Sezonowość ta może być pomocna w budowaniu strategii inwestycyjnych, pozwalając na lepsze dopasowanie momentu zakupu lub sprzedaży.
+
+Warto również zauważyć spadek zmienności BTC w miarę dojrzewania rynku. Chociaż Bitcoin pozostaje bardziej zmiennym aktywem w porównaniu do tradycyjnych indeksów, takich jak Nasdaq100, jego stabilizacja jest pozytywnym sygnałem dla inwestorów poszukujących równowagi między potencjałem zysku a ryzykiem.
+
+Podsumowując, analiza danych wskazuje na możliwość przewidywania pewnych wzorców i cykli rynkowych BTC. Optymalizacja momentu wejścia w inwestycję, unikanie zakupu w fazie euforii rynkowej oraz uwzględnianie sezonowości i sygnałów technicznych mogą znacząco poprawić efektywność strategii inwestycyjnej na tym rynku.
